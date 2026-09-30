@@ -81,7 +81,7 @@ docs/adr     Architecture decision records
    - builds the web app and deploys it to SWA together with the Functions API;
    - smoke-tests `/api/health`, `/api/models` and a real `/api/systemone` call through APIM.
 
-   Region: resources go to `swedencentral` and SWA to `westeurope`. Change `LOCATION` / `AZURE_LOCATION` in
+   Region: resources go to `swedencentral` and SWA to `eastus2` (westeurope is blocked for this subscription). Change `LOCATION` / `AZURE_LOCATION` in
    `.github/workflows/deploy.yml` if needed.
 
 ## Deploy manually

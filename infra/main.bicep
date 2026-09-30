@@ -24,7 +24,7 @@ param location string = resourceGroup().location
   'westus2'
   'eastasia'
 ])
-param swaLocation string = 'westeurope'
+param swaLocation string = 'eastus2'
 
 @description('APIM publisher e-mail. Supplied at deploy time; never committed.')
 param publisherEmail string

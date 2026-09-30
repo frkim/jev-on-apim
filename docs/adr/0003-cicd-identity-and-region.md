@@ -13,7 +13,8 @@ does not have. Separately, the target subscription does not accept new resources
 
 - Use the `AZURE_CREDENTIALS` JSON secret with `azure/login`, which is a service principal with a client secret.
 - Deploy regional resources to **`swedencentral`**. Override it with the `AZURE_LOCATION` environment variable.
-  SWA metadata stays in `westeurope`, which is an SWA-supported region.
+  SWA metadata goes to `eastus2` (an SWA-supported region), because `westeurope` also rejects SWA here.
+  Override it with the `SWA_LOCATION` environment variable.
 
 ## Consequences
 

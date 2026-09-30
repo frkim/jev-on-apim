@@ -22,5 +22,5 @@ free SKUs.
 - ➕ No hosting cost, a global CDN, and same-origin API calls (no CORS).
 - ➖ Managed functions allow HTTP triggers only, with a ~45 s request limit. SWA Free is limited to 2 custom domains and
   0.5 GB of storage.
-- ➖ SWA is available in only a few regions (we use `westeurope` for SWA metadata; content is served
+- ➖ SWA is available in only a few regions (we use `eastus2` for SWA metadata; content is served
   globally).
