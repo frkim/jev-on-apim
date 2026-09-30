@@ -1,0 +1,184 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      skip_infra:
+        description: Skip the Bicep deployment and only redeploy the app
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: rg-jevapim-dev-sdc
+  LOCATION: swedencentral
+  AZURE_LOCATION: swedencentral
+  PIP_INDEX_URL: https://packagefeedproxy.microsoft.io/pypi/simple
+  NPM_CONFIG_REGISTRY: https://packagefeedproxy.microsoft.io/npm/
+
+jobs:
+  ci:
+    name: Build and test
+    uses: ./.github/workflows/ci.yml
+
+  build-web:
+    name: Build web artifact
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/web/package-lock.json
+      - name: Build static export
+        working-directory: src/web
+        env:
+          NEXT_PUBLIC_BUILD_SHA: ${{ github.sha }}
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-out
+          path: src/web/out
+          retention-days: 3
+          if-no-files-found: error
+
+  infra:
+    name: Provision Azure resources
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: dev
+    outputs:
+      swaName: ${{ steps.deploy.outputs.swaName }}
+      swaHostname: ${{ steps.deploy.outputs.swaHostname }}
+      apimGatewayUrl: ${{ steps.deploy.outputs.apimGatewayUrl }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Deploy Bicep (with retry for Key Vault RBAC propagation)
+        id: deploy
+        env:
+          JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
+          APIM_PUBLISHER_EMAIL: ${{ vars.APIM_PUBLISHER_EMAIL }}
+          SKIP_INFRA: ${{ inputs.skip_infra || false }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JEV_API_KEY}" ]; then echo "::error::JEV_API_KEY secret is not set"; exit 1; fi
+          if [ -z "${APIM_PUBLISHER_EMAIL}" ]; then echo "::error::APIM_PUBLISHER_EMAIL variable is not set"; exit 1; fi
+
+          az group create --name "$RESOURCE_GROUP" --location "$LOCATION" \
+            --tags env=dev workload=jevapim owner=jev-on-apim costCenter=sample dataClassification=internal \
+            --output none
+
+          if [ "$SKIP_INFRA" != "true" ]; then
+            for attempt in 1 2 3; do
+              if az deployment group create \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --name "main-${GITHUB_RUN_ID}-${attempt}" \
+                  --parameters infra/main.bicepparam \
+                  --output none; then
+                break
+              fi
+              if [ "$attempt" = "3" ]; then echo "::error::Bicep deployment failed after 3 attempts"; exit 1; fi
+              echo "::warning::Deployment attempt ${attempt} failed (often Key Vault RBAC propagation). Retrying in 60s..."
+              sleep 60
+            done
+          fi
+
+          outputs=$(az deployment group list --resource-group "$RESOURCE_GROUP" \
+            --query "[?properties.provisioningState=='Succeeded' && starts_with(name,'main-')] | sort_by(@, &properties.timestamp) | [-1].properties.outputs" -o json)
+          echo "swaName=$(echo "$outputs" | jq -r .swaName.value)" >> "$GITHUB_OUTPUT"
+          echo "swaHostname=$(echo "$outputs" | jq -r .swaDefaultHostname.value)" >> "$GITHUB_OUTPUT"
+          echo "apimGatewayUrl=$(echo "$outputs" | jq -r .apimGatewayUrl.value)" >> "$GITHUB_OUTPUT"
+
+  deploy-app:
+    name: Deploy Static Web App
+    needs: [build-web, infra]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: dev
+      url: https://${{ needs.infra.outputs.swaHostname }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: web-out
+          path: src/web/out
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Get SWA deployment token
+        id: token
+        run: |
+          token=$(az staticwebapp secrets list --name "${{ needs.infra.outputs.swaName }}" \
+            --resource-group "$RESOURCE_GROUP" --query properties.apiKey -o tsv)
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Deploy to Static Web Apps
+        uses: Azure/static-web-apps-deploy@1a947af9992250f3bc2e68ad0754c0b0c11566c9 # v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.token.outputs.token }}
+          action: upload
+          app_location: src/web/out
+          api_location: src/api
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: false
+        env:
+          PIP_INDEX_URL: https://packagefeedproxy.microsoft.io/pypi/simple
+
+  smoke-test:
+    name: Smoke test
+    needs: [infra, deploy-app]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check web and API health
+        env:
+          HOST: ${{ needs.infra.outputs.swaHostname }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            body=$(curl -fsS "https://${HOST}/api/health" || true)
+            if echo "$body" | grep -q '"status"'; then
+              echo "API health: $body"
+              echo "$body" | grep -q '"mode": *"apim"' || { echo "::error::API is not in apim mode"; exit 1; }
+              break
+            fi
+            if [ "$i" = "20" ]; then echo "::error::API health check failed"; exit 1; fi
+            sleep 15
+          done
+          curl -fsS -o /dev/null -w "Home page HTTP %{http_code}\n" "https://${HOST}/"
+          curl -fsS "https://${HOST}/api/models" | head -c 400; echo
+      - name: End-to-end Jev call through APIM
+        env:
+          HOST: ${{ needs.infra.outputs.swaHostname }}
+        run: |
+          set -euo pipefail
+          response=$(curl -sS -X POST "https://${HOST}/api/systemone" \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"jev-latest","state":"The sky is blue and the sun is shining.","questions":{"sunny":{"type":"noul","instructions":"Is it sunny?"}}}')
+          echo "$response" | head -c 800; echo
+          echo "$response" | grep -q '"result"' || { echo "::error::End-to-end call failed"; exit 1; }

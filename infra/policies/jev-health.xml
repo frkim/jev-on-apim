@@ -1,0 +1,28 @@
+<policies>
+  <!-- Lightweight gateway health probe: answered by APIM itself, never calls Jev (no token cost). -->
+  <inbound>
+    <base />
+    <return-response>
+      <set-status code="200" reason="OK" />
+      <set-header name="Content-Type" exists-action="override">
+        <value>application/json</value>
+      </set-header>
+      <set-body>@{
+        return new JObject(
+          new JProperty("status", "ok"),
+          new JProperty("gateway", "azure-apim"),
+          new JProperty("api", "jev"),
+          new JProperty("timeUtc", DateTime.UtcNow.ToString("o"))).ToString();
+      }</set-body>
+    </return-response>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
