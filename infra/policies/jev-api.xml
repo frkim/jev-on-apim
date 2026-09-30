@@ -1,0 +1,73 @@
+<policies>
+  <!--
+  Jev System One API policy (API scope).
+  - Authenticates callers with the APIM subscription key (enforced by the product/API settings).
+  - Injects the Jev bearer key from a Key Vault backed named value; the key never leaves Azure.
+  - Throttles callers (rate-limit works on the Consumption tier; rate-limit-by-key does not).
+  - Retries transient upstream throttling/overload (429/529/503) with exponential backoff.
+-->
+  <inbound>
+    <base />
+    <rate-limit calls="60" renewal-period="60" remaining-calls-header-name="x-ratelimit-remaining" />
+    <set-variable name="correlationId" value="@{
+      var incoming = context.Request.Headers.GetValueOrDefault("x-correlation-id", "");
+      return System.Text.RegularExpressions.Regex.IsMatch(incoming, "^[A-Za-z0-9._-]{1,64}$") ? incoming : context.RequestId.ToString();
+    }" />
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@((string)context.Variables["correlationId"])</value>
+    </set-header>
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <set-header name="Authorization" exists-action="override">
+      <value>Bearer {{jev-api-key}}</value>
+    </set-header>
+    <set-backend-service backend-id="jevmodel" />
+  </inbound>
+  <backend>
+    <retry condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode == 503 || context.Response.StatusCode == 529))" count="3" interval="1" max-interval="8" delta="1" first-fast-retry="false">
+      <forward-request buffer-request-body="true" timeout="120" />
+    </retry>
+  </backend>
+  <outbound>
+    <base />
+    <set-header name="x-apim-request-id" exists-action="override">
+      <value>@(context.RequestId.ToString())</value>
+    </set-header>
+    <set-header name="x-correlation-id" exists-action="override">
+      <value>@((string)context.Variables["correlationId"])</value>
+    </set-header>
+    <set-header name="x-gateway" exists-action="override">
+      <value>azure-apim</value>
+    </set-header>
+    <set-header name="x-gateway-elapsed-ms" exists-action="override">
+      <value>@(((int)context.Elapsed.TotalMilliseconds).ToString())</value>
+    </set-header>
+    <set-header name="Set-Cookie" exists-action="delete" />
+    <set-header name="Server" exists-action="delete" />
+  </outbound>
+  <on-error>
+    <base />
+    <!-- Preserve gateway-generated client errors (401 missing key, 429 throttled); map everything else to 502. -->
+    <set-variable name="errorStatus" value="@{
+      var status = context.Response != null ? context.Response.StatusCode : 0;
+      return (status >= 400 &amp;&amp; status &lt; 500) ? status : 502;
+    }" />
+    <return-response>
+      <set-status code="@((int)context.Variables[&quot;errorStatus&quot;])" reason="@((int)context.Variables[&quot;errorStatus&quot;] == 502 ? &quot;Bad Gateway&quot; : context.Response.StatusReason)" />
+      <set-header name="Content-Type" exists-action="override">
+        <value>application/json</value>
+      </set-header>
+      <set-header name="x-apim-request-id" exists-action="override">
+        <value>@(context.RequestId.ToString())</value>
+      </set-header>
+      <set-body>@{
+        return new JObject(
+          new JProperty("error", new JObject(
+            new JProperty("type", "gateway_error"),
+            new JProperty("source", context.LastError.Source),
+            new JProperty("reason", context.LastError.Reason),
+            new JProperty("message", context.LastError.Message))),
+          new JProperty("requestId", context.RequestId.ToString())).ToString();
+      }</set-body>
+    </return-response>
+  </on-error>
+</policies>
