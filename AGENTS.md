@@ -19,6 +19,8 @@ and APIM.
 | `src/api` | Python 3.11 Azure Functions (SWA managed API) — `/api/health`, `/api/models`, `/api/systemone` |
 | `infra` | Bicep (resource-group scope): APIM, Key Vault, Log Analytics, App Insights, SWA |
 | `infra/policies` | APIM policy XML (`jev-api.xml`, `jev-health.xml`) |
+| `infra/hooks` | azd `preprovision` hooks (sh + pwsh) that ensure `APIM_PUBLISHER_EMAIL` / `JEV_API_KEY` are set |
+| `azure.yaml` | Azure Developer CLI project (`azd up`): Bicep infra + `web` SWA service (`src/web/swa-cli.config.json`) |
 | `.github/workflows` | `ci.yml`, `deploy.yml`, `codeql.yml` |
 | `docs/adr` | Architecture Decision Records |
 

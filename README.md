@@ -60,7 +60,8 @@ APIM also exposes `GET /jev/v1/health`, which is answered by APIM itself and nev
 ```text
 src/web      Next.js 15 + MUI (static export)  → Jev Studio UI
 src/api      Python 3.11 Azure Functions         → /api/health, /api/models, /api/systemone
-infra        Bicep: main.bicep + modules/ (monitoring, keyvault, apim, staticwebapp) + policies/
+infra        Bicep: main.bicep + modules/ (monitoring, keyvault, apim, staticwebapp) + policies/ + azd hooks/
+azure.yaml   Azure Developer CLI (azd) project definition
 .github      CI, Deploy, CodeQL workflows, Dependabot, Copilot instructions
 docs/adr     Architecture decision records
 ```
@@ -83,6 +84,44 @@ docs/adr     Architecture decision records
 
    Region: resources go to `swedencentral` and SWA to `eastus2` (westeurope is blocked for this subscription). Change `LOCATION` / `AZURE_LOCATION` in
    `.github/workflows/deploy.yml` if needed.
+
+## Deploy with the Azure Developer CLI (azd)
+
+The quickest way to deploy everything from your machine is [`azd`](https://aka.ms/azd). You need `azd`,
+Node.js 22 and an Azure subscription where you can create role assignments (Owner, or Contributor + User Access
+Administrator).
+
+```bash
+azd auth login
+azd up
+```
+
+`azd up` will:
+
+1. ask for an environment name, subscription, region (used for APIM, Key Vault and monitoring) and resource group;
+2. run the `preprovision` hook ([`infra/hooks`](infra/hooks)), which asks for `APIM_PUBLISHER_EMAIL` and
+   `JEV_API_KEY` if they are not already set in the azd environment;
+3. provision [`infra/main.bicep`](infra/main.bicep) through [`infra/main.bicepparam`](infra/main.bicepparam);
+4. build the Next.js static export and deploy it with the managed Python Functions API (`src/api`) to the
+   Static Web App, as configured in [`src/web/swa-cli.config.json`](src/web/swa-cli.config.json).
+
+To run non-interactively, set the values first:
+
+```bash
+azd env new jevapim-dev
+azd env set AZURE_SUBSCRIPTION_ID <subscription id>
+azd env set AZURE_LOCATION swedencentral
+azd env set AZURE_RESOURCE_GROUP rg-jevapim-dev-sdc
+azd env set APIM_PUBLISHER_EMAIL you@example.com
+azd env set JEV_API_KEY <your key>
+azd env set SWA_LOCATION eastus2   # optional: westeurope, centralus, eastus2, westus2 or eastasia
+azd up --no-prompt
+```
+
+The values are stored only in `.azure/<env>/.env`, which is git-ignored. Use `azd deploy` to redeploy only the
+app and `azd down` to delete everything. Key Vault purge protection keeps the deleted vault for 7 days, so use
+a new resource group name if you redeploy within that window. If the first provisioning fails while APIM reads
+the Key Vault secret, the role assignment is still propagating: wait a minute and run `azd provision` again.
 
 ## Deploy manually
 
