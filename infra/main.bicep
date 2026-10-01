@@ -107,7 +107,7 @@ module staticWebApp 'modules/staticwebapp.bicep' = {
     apimSubscriptionName: apim.outputs.webSubscriptionName
     apimGatewayUrl: apim.outputs.gatewayUrl
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
-    tags: tags
+    tags: union(tags, { 'azd-service-name': 'web' })
   }
 }
 

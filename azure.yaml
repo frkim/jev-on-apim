@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+# Azure Developer CLI (azd) project: `azd up` provisions infra/main.bicep (via infra/main.bicepparam)
+# and deploys Jev Studio (src/web) with its managed Python Functions API (src/api) to Static Web Apps.
+name: jev-on-apim
+metadata:
+  template: jev-on-apim@0.1.0
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+services:
+  web:
+    # Build/deploy settings (output folder, ../api, python 3.11, production env) live in swa-cli.config.json.
+    project: ./src/web
+    language: js
+    host: staticwebapp
+
+hooks:
+  preprovision:
+    posix:
+      shell: sh
+      run: ./infra/hooks/preprovision.sh
+      interactive: true
+      continueOnError: false
+    windows:
+      shell: pwsh
+      run: ./infra/hooks/preprovision.ps1
+      interactive: true
+      continueOnError: false
